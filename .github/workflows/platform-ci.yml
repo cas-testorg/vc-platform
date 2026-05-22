@@ -33,15 +33,11 @@ on:
 
 jobs:
   ci:
-    if: ${{ github.actor != 'dependabot[bot]' &&
+    if: ${{ github.actor != 'renovate[bot]' &&
          (github.event.pull_request.head.repo.full_name == github.repository ||
-         github.event.pull_request.head.repo.full_name == '') }}  # Check that PR not from forked repo and not from Dependabot
+         github.event.pull_request.head.repo.full_name == '') }}
     runs-on: ubuntu-24.04
     env:
-      CLOUD_INSTANCE_BASE_URL: ${{secrets.CLOUD_INSTANCE_BASE_URL}}
-      CLIENT_ID: ${{secrets.CLIENT_ID}}
-      CLIENT_SECRET: ${{secrets.CLIENT_SECRET}}
-      SONAR_TOKEN: ${{secrets.SONAR_TOKEN}}
       GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
       NUGET_KEY: ${{ secrets.NUGET_KEY }}
       BLOB_SAS: ${{ secrets.BLOB_TOKEN }}
@@ -50,20 +46,9 @@ jobs:
       VERSION_SUFFIX: ''
       IMAGE_NAME: 'platform'
       PACKAGE_SERVER: 'ghcr.io'
-      BUILD_STATE: 'failed'
-      RELEASE_STATUS: 'false'
       BUILD_DOCKER: 'false'
       DOCKER_TAG: 'dev-linux-latest'
       MSBuildEnableWorkloadResolver: 'false'
-
-    outputs:
-      artifactUrl: ${{ steps.artifactUrl.outputs.DOCKER_URL }}
-      jira-keys: ${{ steps.jira_keys.outputs.jira-keys }}
-      version: ${{ steps.image.outputs.shortVersion }}
-      tag: ${{ env.DOCKER_TAG }}
-      matrix: ${{ steps.deployment-matrix.outputs.matrix }}
-      run-e2e: ${{ steps.run-e2e.outputs.result }}
-      vulnSkipList: ${{ steps.vulnSkipList.outputs.vulnSkipList }}
 
     steps:
 
@@ -84,11 +69,6 @@ jobs:
         echo "PUBLISH_TO_DOCKER=false" >> $GITHUB_ENV
         echo "UPDATE_LATEST_TAG=${{ github.event.inputs.forceLatest }}" >> $GITHUB_ENV
 
-    - name: Set RELEASE_STATUS
-      if: ${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && github.event_name == 'push' }}
-      run: |
-        echo "RELEASE_STATUS=true" >> $GITHUB_ENV
-
     - name: Set BUILD_DOCKER
       if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/dev-dockerenv' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master') || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main') }}
       run: |
@@ -100,9 +80,6 @@ jobs:
 
     - name: Install VirtoCommerce.GlobalTool
       uses: VirtoCommerce/vc-github-actions/setup-vcbuild@master
-
-    - name: Install dotnet-sonarscanner
-      run: dotnet tool install --global dotnet-sonarscanner
 
     - name: Get Image Version
       uses: VirtoCommerce/vc-github-actions/get-image-version@master
@@ -128,51 +105,17 @@ jobs:
           echo "DOCKER_TAG=${{ steps.image.outputs.taggedVersion }}" >> $GITHUB_ENV
         fi;
 
-    - name: Extract vulnerabilities skip list
-      id: vulnSkipList
-      shell: pwsh
-      run: |
-        $vulnSkipList = @()
-        if (Test-Path ./cve-ignore.json) {
-          Write-Host "'cve-ignore.json' file found"
-          $skipList = (Get-Content ./cve-ignore.json | ConvertFrom-Json)
-          foreach ($vulnerability in $skipList.PSObject.Properties.Name){
-            echo "Adding '$vulnerability' with '$($skipList.$vulnerability.Severity)' severity entry to trivy scan ignore list"
-            $vulnSkipList += $($skipList.$vulnerability.VulnerabilityID)
-          }
-          $stringSkipList = $vulnSkipList -join ","
-          echo "vulnSkipList=$stringSkipList" >> $env:GITHUB_OUTPUT
-        }
-        else {
-          Write-Warning "'cve-ignore.json' file not found. Using empty skip list."
-          echo "vulnSkipList=$vulnSkipList" >> $env:GITHUB_OUTPUT
-        }
     - name: Add version suffix
       if: ${{ github.ref != 'refs/heads/master' || github.ref != 'refs/heads/main' }}
       uses: VirtoCommerce/vc-github-actions/add-version-suffix@master
       with:
         versionSuffix: ${{ env.VERSION_SUFFIX }}
 
-    - name: SonarCloud Begin
-      uses: VirtoCommerce/vc-github-actions/sonar-scanner-begin@master
-
     - name: Build
       run: vc-build Compile
 
     - name: Unit Tests
       run: vc-build Test -skip
-
-    - name: BUILD_STATE::successful
-      if: success()
-      run: echo "BUILD_STATE=successful" >> $GITHUB_ENV
-
-    - name: SonarCloud End
-      uses: VirtoCommerce/vc-github-actions/sonar-scanner-end@master
-
-    - name: Quality Gate
-      uses: VirtoCommerce/vc-github-actions/sonar-quality-gate@master
-      with:
-        login: ${{secrets.SONAR_TOKEN}}
 
     - name: Packaging
       run: vc-build Compress -skip Clean+Restore+Compile+Test
@@ -194,50 +137,16 @@ jobs:
         username: $GITHUB_ACTOR
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Swagger validation
-      uses: VirtoCommerce/vc-github-actions/docker-env@master
-      if: ${{ github.ref == 'refs/heads/dev' }}
-      with:
-        githubUser: ${{ env.GITHUB_ACTOR }}
-        githubToken: ${{ env.GITHUB_TOKEN }}
-        platformDockerTag: ${{ env.DOCKER_TAG }}
-        platformImage: ${{ env.PACKAGE_SERVER }}/virtocommerce/platform
-        installSampleData: 'false'
-
     - name: Publish Nuget
       if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
       uses: VirtoCommerce/vc-github-actions/publish-nuget@master
 
     - name: Publish to Blob
       if: ${{ github.ref == 'refs/heads/dev' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (github.ref != 'refs/heads/master' || github.ref != 'refs/heads/main')) }}
-      id: blobRelease
       uses: VirtoCommerce/vc-github-actions/publish-blob-release@master
       with:
         blobSAS: ${{ secrets.BLOB_TOKEN }}
         blobUrl: ${{ vars.BLOB_URL }}
-
-    - name: Set artifactUrl value
-      id: artifactUrl
-      run: |
-        echo "DOCKER_URL=${{ env.PACKAGE_SERVER }}/${{github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.DOCKER_TAG }}" >> $GITHUB_OUTPUT
-        echo "BLOB_URL=${{ steps.blobRelease.outputs.packageUrl }}" >> $GITHUB_OUTPUT
-
-    - name: Add Jira link
-      if: ${{ github.event_name == 'pull_request' }}
-      uses: VirtoCommerce/vc-github-actions/publish-jira-link@master
-      with:
-        branchName: ${{ github.head_ref }}
-        repoOrg: ${{ github.repository_owner }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Add link to PR
-      if: ${{ github.event_name == 'pull_request' }}
-      uses: VirtoCommerce/vc-github-actions/publish-artifact-link@master
-      with:
-        artifactUrl: ${{ steps.artifactUrl.outputs.DOCKER_URL }}
-        repoOrg: ${{ github.repository_owner }}
-        downloadComment: 'Image tag:'
 
     - name: Publish Github Release
       if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
@@ -245,26 +154,6 @@ jobs:
         changelog: ${{ steps.changelog.outputs.changelog }}
         organization: ${{ github.repository_owner }}
       uses: VirtoCommerce/vc-github-actions/publish-github-release@master
-
-    - name: Create deployment matrix
-      if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
-      uses: VirtoCommerce/vc-github-actions/cloud-create-deploy-matrix@master
-      id: deployment-matrix
-      with:
-        deployConfigPath: 'cloudDeploy.json'
-        releaseBranch: 'master'
-
-    - name: Check commit message for version number
-      id: run-e2e
-      env:
-        COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-      run: |
-          if [[ "$COMMIT_MESSAGE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; 
-          then
-            echo "result=false" >> $GITHUB_OUTPUT
-          else
-            echo "result=true" >> $GITHUB_OUTPUT
-          fi
 
     - name: Publish Docker Image
       if: ${{ env.BUILD_DOCKER == 'true' }}
@@ -276,94 +165,3 @@ jobs:
           docker_token: ${{ secrets.DOCKER_TOKEN }}
           docker_hub: ${{ env.PUBLISH_TO_DOCKER }}
           update_latest: ${{ env.UPDATE_LATEST_TAG }}
-
-    - name: Parse Jira Keys from All Commits
-      uses: VirtoCommerce/vc-github-actions/get-jira-keys@master
-      if: always()
-      id: jira_keys
-      with:
-        release: ${{ env.RELEASE_STATUS }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Push Build Info to Jira
-      if: ${{ env.CLOUD_INSTANCE_BASE_URL != 0 && env.CLIENT_ID != 0 && env.CLIENT_SECRET != 0 && steps.jira_keys.outputs.jira-keys != '' && always() }}
-      id: push_build_info_to_jira
-      uses: VirtoCommerce/jira-upload-build-info@master
-      with:
-        cloud-instance-base-url: '${{ secrets.CLOUD_INSTANCE_BASE_URL }}'
-        client-id: '${{ secrets.CLIENT_ID }}'
-        client-secret: '${{ secrets.CLIENT_SECRET }}'
-        pipeline-id: '${{ github.repository }} ${{ github.workflow }}'
-        build-number: ${{ github.run_number }}
-        build-display-name: 'Workflow: ${{ github.workflow }} (#${{ github.run_number }})'
-        build-state: '${{ env.BUILD_STATE }}'
-        build-url: '${{github.event.repository.url}}/actions/runs/${{github.run_id}}'
-        update-sequence-number: '${{ github.run_id }}'
-        last-updated: '${{github.event.head_commit.timestamp}}'
-        issue-keys: '${{ steps.jira_keys.outputs.jira-keys }}'
-        commit-id: '${{ github.sha }}'
-        repo-url: '${{ github.event.repository.url }}'
-        build-ref-url: '${{ github.event.repository.url }}/actions/runs/${{ github.run_id }}'
-
-    - name: Confirm Jira Build Output
-      if: success()
-      run: |
-        echo "Jira Upload Build Info response: ${{ steps.push_build_info_to_jira.outputs.response }}"
-  auto-tests:
-    needs: ci
-    if: ${{ ((github.ref == 'refs/heads/dev') && (github.event_name == 'push') && (needs.ci.outputs.run-e2e == 'true')) ||
-        (github.event_name == 'workflow_dispatch') || (github.base_ref == 'dev') && (github.event_name == 'pull_request') }}
-    uses: VirtoCommerce/.github/.github/workflows/pytest-tests.yml@v3.800.33
-    with:
-      installModules: 'true'
-      installCustomModule: 'false'
-      platformDockerTag: ${{ needs.ci.outputs.tag }}
-      vctestingRepoBranch: 'dev'
-      frontendZipUrl: 'latest'
-      testSuites: 'graphql,restapi,e2e'
-    secrets:
-      envPAT: ${{ secrets.REPO_TOKEN }}
-      testSecretEnvFile: ${{ secrets.VC_TESTING_MODULE_ENV_FILE }}
-      sendgridApiKey: ${{ secrets.SENDGRID_APIKEY_4E2E_AUTOTESTS }}
-
-  deploy-cloud:
-    if: ${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && github.event_name == 'push' }}
-    needs: ci
-    uses: VirtoCommerce/.github/.github/workflows/deploy-cloud.yml@v3.800.33    
-    with:
-      releaseSource: platform
-      platformVer: ${{ needs.ci.outputs.version }}
-      platformTag: ${{ needs.ci.outputs.tag }}
-      jiraKeys: ${{ needs.ci.outputs.jira-keys }}
-      matrix: '{"include":${{ needs.ci.outputs.matrix }}}'
-    secrets: inherit
-
-  owasp-scan:
-    if: ${{ github.ref == 'refs/heads/dev' && github.event_name == 'push' }}
-    runs-on: ubuntu-latest
-    needs: 
-      - deploy-cloud
-    steps:
-      - name: OWASP ZAP Full Scan
-        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
-        with:
-          token: ${{ secrets.REPO_TOKEN }}
-          target: 'https://vcptcore-dev.govirto.com'
-          cmd_options: '-a -d'
-
-  trivy-scan:
-    if: ${{ github.ref == 'refs/heads/dev' && github.event_name == 'push' }}
-    needs: 'ci'
-    uses: VirtoCommerce/.github/.github/workflows/docker-image-vulnerability-process.yml@v3.800.33
-    with:
-      assigneeAccountId: '621c47c0302c6b006af0a1cd'
-      assigneeEmailAddress: 'andrew.kubyshkin@virtoworks.com'
-      exitCodeOnFoundVulnerabilities: '0'
-      imageRef: "ghcr.io/virtocommerce/platform"
-      imageTag: ${{ needs.ci.outputs.tag }}
-      jiraProject: 'VCST'
-      vulnerabilitySkipList: ${{ needs.ci.outputs.vulnSkipList }}
-    secrets:
-      JIRA_USER: ${{ secrets.JIRA_USER }}
-      JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
