@@ -1,167 +1,131 @@
-# v3.800.31
-# https://virtocommerce.atlassian.net/browse/VCST-4958
-name: Platform CI
+name: CI Pipeline (Build + CodeLogic Scan)
 
 on:
-  workflow_dispatch:
-    inputs:
-      forceLatest:
-        description: "Flag to set dev-linux-latest flag on workflow_dispatch event. Allowed values true or false."
-        required: false
-        type: boolean
-        default: false
-
   push:
-    paths-ignore:
-      - '.github/**'
-      - 'docs/**'
-      - 'build/**'
-      - 'README.md'
-      - 'LICENSE'
-      - '**/argoDeploy.json'
-      - '**/cloudDeploy.json'
-    branches: [ master, dev ]
-
+    branches: [ dev ]
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - 'build/**'
-      - 'README.md'
-      - 'LICENSE'
-      - '**/argoDeploy.json'
-      - '**/cloudDeploy.json'
+    branches: [ dev ]
+  workflow_dispatch:
+
+concurrency:
+  group: build-scan-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_CONFIGURATION: Release
+  PUBLISH_OUTPUT: artifacts/out
+  SOLUTION: VirtoCommerce.Platform.sln
 
 jobs:
-  ci:
-    if: ${{ github.actor != 'renovate[bot]' &&
-         (github.event.pull_request.head.repo.full_name == github.repository ||
-         github.event.pull_request.head.repo.full_name == '') }}
-    runs-on: ubuntu-24.04
+  build-and-scan:
+    name: Build + CodeLogic Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     env:
-      GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
-      NUGET_KEY: ${{ secrets.NUGET_KEY }}
-      BLOB_SAS: ${{ secrets.BLOB_TOKEN }}
-      PUBLISH_TO_DOCKER: 'true'
-      UPDATE_LATEST_TAG: 'true'
-      VERSION_SUFFIX: ''
-      IMAGE_NAME: 'platform'
-      PACKAGE_SERVER: 'ghcr.io'
-      BUILD_DOCKER: 'false'
-      DOCKER_TAG: 'dev-linux-latest'
-      MSBuildEnableWorkloadResolver: 'false'
+      DOTNET_MULTILEVEL_LOOKUP: "0"
+      DOTNET_NOLOGO: "1"
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+      CI: "true"
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-    - name: Set up Node 24
-      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-      with:
-        node-version: '24'
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
 
-    - name: Set up Java 17
-      uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
-      with:
-        distribution: 'temurin'
-        java-version: '17'
+      - name: Restore, build, publish (capture build.log for CodeLogic)
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -o pipefail
 
-    - name: Set variables
-      if: ${{ github.event_name == 'workflow_dispatch' }}
-      run: |
-        echo "PUBLISH_TO_DOCKER=false" >> $GITHUB_ENV
-        echo "UPDATE_LATEST_TAG=${{ github.event.inputs.forceLatest }}" >> $GITHUB_ENV
+          mkdir -p "${GITHUB_WORKSPACE}/logs"
+          BUILD_LOG="${GITHUB_WORKSPACE}/logs/build.log"
+          echo "BUILD_LOG=${BUILD_LOG}" >> "$GITHUB_ENV"
+          mkdir -p "${{ env.PUBLISH_OUTPUT }}"
 
-    - name: Set BUILD_DOCKER
-      if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/dev-dockerenv' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master') || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main') }}
-      run: |
-        echo "BUILD_DOCKER=true" >> $GITHUB_ENV
+          SLN="${{ env.SOLUTION }}"
+          {
+            echo "========== CI build log =========="
+            echo "Repository: ${{ github.repository }}"
+            echo "Workflow: ${{ github.workflow }}  Run: ${{ github.run_id }}  Attempt: ${{ github.run_attempt }}"
+            echo "Ref: ${{ github.ref }}  SHA: ${{ github.sha }}"
+            echo "========== dotnet --version =========="
+            dotnet --version
+            echo "========== Restore =========="
+            dotnet restore "$SLN" -p:NuGetAudit=false
+            echo "========== Build =========="
+            dotnet build "$SLN" \
+              -c "${{ env.BUILD_CONFIGURATION }}" \
+              /p:TreatWarningsAsErrors=false \
+              -p:NuGetAudit=false \
+              -p:DeployOnBuild=false \
+              --no-restore
+            echo "========== Publish =========="
+            dotnet publish "$SLN" \
+              -c "${{ env.BUILD_CONFIGURATION }}" \
+              --no-build \
+              -o "${{ env.PUBLISH_OUTPUT }}" \
+              /p:TreatWarningsAsErrors=false \
+              -p:NuGetAudit=false \
+              -p:DeployOnBuild=false \
+              -p:DeployOnPublish=False
+            echo "========== Done =========="
+          } 2>&1 | tee -a "${BUILD_LOG}"
 
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      with:
-        fetch-depth: 0
+      - name: Upload publish output
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dotnet-publish
+          path: ${{ env.PUBLISH_OUTPUT }}
+          if-no-files-found: error
 
-    - name: Install VirtoCommerce.GlobalTool
-      uses: VirtoCommerce/vc-github-actions/setup-vcbuild@master
+      - name: Run CodeLogic Scan (published output + ref-path)
+        if: always()
+        env:
+          CODELOGIC_HOST: ${{ vars.CODELOGIC_HOST }}
+          AGENT_UUID: ${{ secrets.AGENT_UUID }}
+          AGENT_PASSWORD: ${{ secrets.AGENT_PASSWORD }}
+          CODELOGIC_APPLICATION_NAME: ${{ vars.CODELOGIC_APPLICATION_NAME }}
+          CODELOGIC_SCAN_SPACE_NAME: ${{ vars.CODELOGIC_SCAN_SPACE_NAME }}
+          CODELOGIC_DATABASE_IDENTITIES: ${{ vars.CODELOGIC_DATABASE_IDENTITIES }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBLISH_DIR="${GITHUB_WORKSPACE}/${{ env.PUBLISH_OUTPUT }}"
+          "${GITHUB_WORKSPACE}/scripts/codelogic/run-dotnet-analyze.sh" \
+            "${PUBLISH_DIR}" \
+            /scan \
+            /usr/share/dotnet
 
-    - name: Get Image Version
-      uses: VirtoCommerce/vc-github-actions/get-image-version@master
-      id: image
+      - name: Send Build Info (with build log)
+        if: always()
+        env:
+          CODELOGIC_HOST: ${{ vars.CODELOGIC_HOST }}
+          AGENT_UUID: ${{ secrets.AGENT_UUID }}
+          AGENT_PASSWORD: ${{ secrets.AGENT_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GH_STATUS="${{ job.status }}"
+          case "${GH_STATUS}" in
+            success)   BUILD_STATUS="SUCCESS" ;;
+            failure)   BUILD_STATUS="FAILURE" ;;
+            cancelled) BUILD_STATUS="CANCELLED" ;;
+            *)         BUILD_STATUS="${GH_STATUS^^}" ;;
+          esac
+          "${GITHUB_WORKSPACE}/scripts/codelogic/send-build-info.sh" "${BUILD_STATUS}"
 
-    - name: Get changelog
-      id: changelog
-      uses: VirtoCommerce/vc-github-actions/changelog-generator@master
-
-    - name: Set VERSION_SUFFIX variable
-      run: |
-        if [ '${{ github.event_name }}' = 'workflow_dispatch' ]; then
-          echo "VERSION_SUFFIX=${{ steps.image.outputs.fullSuffix }}" >> $GITHUB_ENV
-        else
-          echo "VERSION_SUFFIX=${{ steps.image.outputs.suffix }}" >> $GITHUB_ENV
-        fi;
-
-    - name: Set DOCKER_TAG variable
-      run: |
-        if [ '${{ github.ref }}' = 'refs/heads/master' ] || [ '${{ github.ref }}' = 'refs/heads/main' ]; then
-          echo "DOCKER_TAG=${{ steps.image.outputs.shortVersion }}" >> $GITHUB_ENV
-        else
-          echo "DOCKER_TAG=${{ steps.image.outputs.taggedVersion }}" >> $GITHUB_ENV
-        fi;
-
-    - name: Add version suffix
-      if: ${{ github.ref != 'refs/heads/master' || github.ref != 'refs/heads/main' }}
-      uses: VirtoCommerce/vc-github-actions/add-version-suffix@master
-      with:
-        versionSuffix: ${{ env.VERSION_SUFFIX }}
-
-    - name: Build
-      run: vc-build Compile
-
-    - name: Unit Tests
-      run: vc-build Test -skip
-
-    - name: Packaging
-      run: vc-build Compress -skip Clean+Restore+Compile+Test
-
-    - name: Build Docker Image
-      if: ${{ env.BUILD_DOCKER == 'true' }}
-      id: dockerBuild
-      uses: VirtoCommerce/vc-github-actions/build-docker-image@master
-      with:
-        tag: ${{ env.DOCKER_TAG }}
-        imageName: 'platform'
-        dockerFiles: 'https://raw.githubusercontent.com/VirtoCommerce/vc-docker/feat/net10/linux/platform/Dockerfile;https://raw.githubusercontent.com/VirtoCommerce/vc-docker/master/linux/platform/wait-for-it.sh'
-
-    - name: Docker Login
-      if: ${{ env.BUILD_DOCKER == 'true' }}
-      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-      with:
-        registry: ${{ env.PACKAGE_SERVER }}
-        username: $GITHUB_ACTOR
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Publish Nuget
-      if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
-      uses: VirtoCommerce/vc-github-actions/publish-nuget@master
-
-    - name: Publish to Blob
-      if: ${{ github.ref == 'refs/heads/dev' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (github.ref != 'refs/heads/master' || github.ref != 'refs/heads/main')) }}
-      uses: VirtoCommerce/vc-github-actions/publish-blob-release@master
-      with:
-        blobSAS: ${{ secrets.BLOB_TOKEN }}
-        blobUrl: ${{ vars.BLOB_URL }}
-
-    - name: Publish Github Release
-      if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
-      with:
-        changelog: ${{ steps.changelog.outputs.changelog }}
-        organization: ${{ github.repository_owner }}
-      uses: VirtoCommerce/vc-github-actions/publish-github-release@master
-
-    - name: Publish Docker Image
-      if: ${{ env.BUILD_DOCKER == 'true' }}
-      uses: VirtoCommerce/vc-github-actions/publish-docker-image@master
-      with:
-          image: ${{ steps.dockerBuild.outputs.imageName }}
-          tag: ${{ env.DOCKER_TAG }}
-          docker_user: ${{ secrets.DOCKER_USERNAME }}
-          docker_token: ${{ secrets.DOCKER_TOKEN }}
-          docker_hub: ${{ env.PUBLISH_TO_DOCKER }}
-          update_latest: ${{ env.UPDATE_LATEST_TAG }}
+      - name: Upload build log artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dotnet-build-log
+          path: logs/build.log
+          if-no-files-found: ignore
+          retention-days: 14
