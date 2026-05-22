@@ -7,7 +7,16 @@
 
   "dependencyDashboardTitle": "Renovate Dashboard (codelogic)",
 
+  "pinDigests": true,
+
   "recreateWhen": "never",
   "rebaseWhen": "never",
-  "semanticCommits": "disabled"
+  "semanticCommits": "disabled",
+
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    }
+  ]
 }
