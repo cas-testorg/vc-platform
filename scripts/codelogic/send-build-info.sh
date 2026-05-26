@@ -20,7 +20,10 @@ if [[ ! -s "$BUILD_LOG" ]]; then
   } > "$BUILD_LOG"
 fi
 
-# CODELOGIC_HOST may include scheme/path (for API calls), but Docker image refs cannot.
+GITCONFIG="$(mktemp)"
+trap 'rm -f "$GITCONFIG"' EXIT
+printf '[safe]\n\tdirectory = /scan\n' > "$GITCONFIG"
+
 IMAGE_HOST="${CODELOGIC_HOST#http://}"
 IMAGE_HOST="${IMAGE_HOST#https://}"
 IMAGE_HOST="${IMAGE_HOST%%/*}"
@@ -28,10 +31,13 @@ IMAGE="${IMAGE_HOST}/codelogic_dotnet:latest"
 JOB_NAME="${GITHUB_REPOSITORY:-unknown} — ${GITHUB_WORKFLOW:-CI}"
 
 docker run --pull always --rm \
+  --user "$(id -u):$(id -g)" \
   -e CODELOGIC_HOST \
   -e AGENT_UUID \
   -e AGENT_PASSWORD \
+  -e GIT_CONFIG_GLOBAL=/tmp/gitconfig-codelogic \
   -v "${REPO_ROOT}:/scan" \
+  -v "${GITCONFIG}:/tmp/gitconfig-codelogic:ro" \
   "$IMAGE" send_build_info \
     --agent-uuid="${AGENT_UUID}" \
     --agent-password="${AGENT_PASSWORD}" \

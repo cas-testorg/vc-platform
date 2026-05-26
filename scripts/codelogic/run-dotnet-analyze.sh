@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scan dotnet publish output with the CodeLogic .NET agent (Docker).
-# Usage: run-dotnet-analyze.sh <publish_dir> [ref_path] [dotnet_shared_path]
+# Usage: run-dotnet-analyze.sh <publish_dir>
 #
 # Optional env (multiline or comma-separated per entry):
 #   CODELOGIC_ASSEMBLY_FILTERS  -> -f|--filter (DLL / filename substrings)
@@ -8,8 +8,6 @@
 set -euo pipefail
 
 PUBLISH_DIR="${1:?publish directory required}"
-REF_PATH="${2:-}"
-DOTNET_PATH="${3:-}"
 
 if [[ -z "${CODELOGIC_HOST:-}" || -z "${AGENT_UUID:-}" || -z "${AGENT_PASSWORD:-}" ]]; then
   echo "CodeLogic credentials not configured (CODELOGIC_HOST, AGENT_UUID, AGENT_PASSWORD); skipping analyze."
@@ -22,7 +20,6 @@ if [[ ! -d "$PUBLISH_DIR" ]]; then
 fi
 
 # Append analyze flags from a multiline/comma-separated env value.
-# Usage: _append_multi_spec FILTER_ARGS --filter "$CODELOGIC_ASSEMBLY_FILTERS"
 _append_multi_spec() {
   local -n _out=$1
   local _flag=$2
@@ -52,18 +49,47 @@ CONTAINER_PUBLISH="/scan/${REL_PUBLISH}"
 
 APPLICATION_NAME="${CODELOGIC_APPLICATION_NAME:-vc-platform}"
 SCAN_SPACE_NAME="${CODELOGIC_SCAN_SPACE_NAME:-Development}"
-# CODELOGIC_HOST may include scheme/path (for API calls), but Docker image refs cannot.
 IMAGE_HOST="${CODELOGIC_HOST#http://}"
 IMAGE_HOST="${IMAGE_HOST#https://}"
 IMAGE_HOST="${IMAGE_HOST%%/*}"
 IMAGE="${IMAGE_HOST}/codelogic_dotnet:latest"
 
+# LibGit2Sharp in the agent reads git metadata from /scan; match runner UID and mark safe.directory.
+DOCKER_USER=(--user "$(id -u):$(id -g)")
+GITCONFIG="$(mktemp)"
+trap 'rm -f "$GITCONFIG"' EXIT
+printf '[safe]\n\tdirectory = /scan\n' > "$GITCONFIG"
+
+DOCKER_VOLUMES=(
+  -v "${REPO_ROOT}:/scan"
+  -v "${GITCONFIG}:/tmp/gitconfig-codelogic:ro"
+)
+
 REF_ARGS=()
-if [[ -n "$REF_PATH" ]]; then
-  REF_ARGS+=(--ref-path="$REF_PATH")
+_add_ref_path() {
+  local _container_path=$1
+  REF_ARGS+=(--ref-path="${_container_path}")
+  echo "  ref-path: ${_container_path}"
+}
+
+# Source tree (namespace / project context; git metadata when ownership matches).
+_add_ref_path /scan
+
+# Host .NET SDK — mount so ref-path resolves Microsoft.* / ASP.NET shared assemblies.
+DOTNET_ROOT="${DOTNET_ROOT:-/usr/share/dotnet}"
+if [[ -d "${DOTNET_ROOT}/shared" ]]; then
+  DOCKER_VOLUMES+=(-v "${DOTNET_ROOT}:/dotnet:ro")
+  _add_ref_path /dotnet/shared
+  if [[ -d "${DOTNET_ROOT}/packs" ]]; then
+    _add_ref_path /dotnet/packs
+  fi
 fi
-if [[ -n "$DOTNET_PATH" && -d "$DOTNET_PATH" ]]; then
-  REF_ARGS+=(--ref-path="$DOTNET_PATH")
+
+# NuGet package cache from restore/build on the runner.
+NUGET_PACKAGES="${NUGET_PACKAGES:-${HOME}/.nuget/packages}"
+if [[ -d "${NUGET_PACKAGES}" ]]; then
+  DOCKER_VOLUMES+=(-v "${NUGET_PACKAGES}:/nuget:ro")
+  _add_ref_path /nuget
 fi
 
 FILTER_ARGS=()
@@ -85,20 +111,18 @@ echo "CodeLogic analyze: application=${APPLICATION_NAME} scan-space=${SCAN_SPACE
 echo "  artifact path (container): ${CONTAINER_PUBLISH}"
 if ((${#FILTER_ARGS[@]})); then
   echo "  assembly filters (-f): ${FILTER_ARGS[*]}"
-else
-  echo "  assembly filters (-f): (none — all matching assemblies under path)"
 fi
 if ((${#METHOD_FILTER_ARGS[@]})); then
   echo "  method filters (-m): ${METHOD_FILTER_ARGS[*]}"
-else
-  echo "  method filters (-m): (none — UI defaults)"
 fi
 
 docker run --pull always --rm \
+  "${DOCKER_USER[@]}" \
   -e CODELOGIC_HOST \
   -e AGENT_UUID \
   -e AGENT_PASSWORD \
-  -v "${REPO_ROOT}:/scan" \
+  -e GIT_CONFIG_GLOBAL=/tmp/gitconfig-codelogic \
+  "${DOCKER_VOLUMES[@]}" \
   "$IMAGE" analyze \
     --application "$APPLICATION_NAME" \
     --path "$CONTAINER_PUBLISH" \
@@ -107,4 +131,5 @@ docker run --pull always --rm \
     "${FILTER_ARGS[@]}" \
     "${METHOD_FILTER_ARGS[@]}" \
     "${DB_ARGS[@]}" \
+    --rescan \
     --expunge-scan-sessions

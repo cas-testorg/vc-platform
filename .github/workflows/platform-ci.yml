@@ -100,10 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           PUBLISH_DIR="${GITHUB_WORKSPACE}/${{ env.PUBLISH_OUTPUT }}"
-          "${GITHUB_WORKSPACE}/scripts/codelogic/run-dotnet-analyze.sh" \
-            "${PUBLISH_DIR}" \
-            /scan \
-            /usr/share/dotnet
+          "${GITHUB_WORKSPACE}/scripts/codelogic/run-dotnet-analyze.sh" "${PUBLISH_DIR}"
 
       - name: Send Build Info (with build log)
         if: always()
