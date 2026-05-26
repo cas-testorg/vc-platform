@@ -106,6 +106,7 @@ echo "  agent home (container): ${CODELOGIC_CONTAINER_HOME} (host: ${CODELOGIC_A
 docker run --pull always --rm \
   "${CODELOGIC_DOCKER_USER[@]}" \
   "${CODELOGIC_DOCKER_ENV[@]}" \
+  -w "${CODELOGIC_CONTAINER_HOME}/work" \
   "${DOCKER_VOLUMES[@]}" \
   "$IMAGE" analyze \
     --application "$APPLICATION_NAME" \

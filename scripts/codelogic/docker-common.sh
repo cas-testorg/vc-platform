@@ -7,7 +7,7 @@
 # With --user uid:gid the image often has no HOME, so config paths become //.local/...
 CODELOGIC_CONTAINER_HOME=/agent-home
 CODELOGIC_AGENT_HOME="${RUNNER_TEMP:-/tmp}/codelogic-agent-home"
-mkdir -p "${CODELOGIC_AGENT_HOME}/.local/share/CodeLogic/netCape"
+mkdir -p "${CODELOGIC_AGENT_HOME}/.local/share/CodeLogic/netCape" "${CODELOGIC_AGENT_HOME}/work"
 
 CODELOGIC_DOCKER_USER=(--user "$(id -u):$(id -g)")
 CODELOGIC_DOCKER_ENV=(

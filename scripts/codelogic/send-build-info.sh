@@ -31,9 +31,11 @@ IMAGE="${IMAGE_HOST}/codelogic_dotnet:latest"
 JOB_NAME="${GITHUB_REPOSITORY:-unknown} — ${GITHUB_WORKFLOW:-CI}"
 
 echo "  agent home (container): ${CODELOGIC_CONTAINER_HOME} (host: ${CODELOGIC_AGENT_HOME})"
+echo "  note: send_build_info runs as container default user so the agent can extract packages under /scan"
 
+# Do not pass --user here: the entrypoint cds to /scan (--path) and extracts send_build_info.tar
+# into the cwd; the checkout is not writable by the runner UID inside the container.
 docker run --pull always --rm \
-  "${CODELOGIC_DOCKER_USER[@]}" \
   "${CODELOGIC_DOCKER_ENV[@]}" \
   "${CODELOGIC_DOCKER_VOLUMES[@]}" \
   "$IMAGE" send_build_info \
@@ -49,3 +51,6 @@ docker run --pull always --rm \
     --log-lines=50000 \
     --timeout=300 \
     --verbose
+
+# Remove package extract droppings from the workspace (written by the agent under /scan).
+rm -f "${REPO_ROOT}/send_build_info.sh" "${REPO_ROOT}/send_build_info.tar" 2>/dev/null || true
