@@ -20,7 +20,11 @@ if [[ ! -s "$BUILD_LOG" ]]; then
   } > "$BUILD_LOG"
 fi
 
-IMAGE="${CODELOGIC_HOST%/}/codelogic_dotnet:latest"
+# CODELOGIC_HOST may include scheme/path (for API calls), but Docker image refs cannot.
+IMAGE_HOST="${CODELOGIC_HOST#http://}"
+IMAGE_HOST="${IMAGE_HOST#https://}"
+IMAGE_HOST="${IMAGE_HOST%%/*}"
+IMAGE="${IMAGE_HOST}/codelogic_dotnet:latest"
 JOB_NAME="${GITHUB_REPOSITORY:-unknown} — ${GITHUB_WORKFLOW:-CI}"
 
 docker run --pull always --rm \

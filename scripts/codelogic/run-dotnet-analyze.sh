@@ -52,7 +52,11 @@ CONTAINER_PUBLISH="/scan/${REL_PUBLISH}"
 
 APPLICATION_NAME="${CODELOGIC_APPLICATION_NAME:-vc-platform}"
 SCAN_SPACE_NAME="${CODELOGIC_SCAN_SPACE_NAME:-Development}"
-IMAGE="${CODELOGIC_HOST%/}/codelogic_dotnet:latest"
+# CODELOGIC_HOST may include scheme/path (for API calls), but Docker image refs cannot.
+IMAGE_HOST="${CODELOGIC_HOST#http://}"
+IMAGE_HOST="${IMAGE_HOST#https://}"
+IMAGE_HOST="${IMAGE_HOST%%/*}"
+IMAGE="${IMAGE_HOST}/codelogic_dotnet:latest"
 
 REF_ARGS=()
 if [[ -n "$REF_PATH" ]]; then
@@ -96,9 +100,9 @@ docker run --pull always --rm \
   -e AGENT_PASSWORD \
   -v "${REPO_ROOT}:/scan" \
   "$IMAGE" analyze \
-    --application="$APPLICATION_NAME" \
-    --path="$CONTAINER_PUBLISH" \
-    --scan-space-name="$SCAN_SPACE_NAME" \
+    --application "$APPLICATION_NAME" \
+    --path "$CONTAINER_PUBLISH" \
+    --scan-space-name "$SCAN_SPACE_NAME" \
     "${REF_ARGS[@]}" \
     "${FILTER_ARGS[@]}" \
     "${METHOD_FILTER_ARGS[@]}" \
