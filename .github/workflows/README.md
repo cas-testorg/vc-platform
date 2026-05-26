@@ -2,7 +2,7 @@
 
 ## [platform-ci.yml](platform-ci.yml)
 
-Runs on **`dev`** only (push, pull request, manual dispatch).
+Runs on **`renovate/**`** branches only (push and pull request).
 
 1. Restore, build, and publish to `artifacts/out` (log: `logs/build.log`)
 2. Upload `dotnet-publish` and `dotnet-build-log` artifacts
