@@ -15,7 +15,12 @@ Runs on **`dev`** only (push, pull request, manual dispatch).
 |------|------|
 | Variable | `CODELOGIC_HOST` |
 | Secret | `AGENT_UUID`, `AGENT_PASSWORD` |
-| Variable (optional) | `CODELOGIC_APPLICATION_NAME`, `CODELOGIC_SCAN_SPACE_NAME`, `CODELOGIC_DATABASE_IDENTITIES` |
+| Variable (optional) | `CODELOGIC_APPLICATION_NAME`, `CODELOGIC_SCAN_SPACE_NAME` |
+| Variable (optional) | `CODELOGIC_ASSEMBLY_FILTERS` — multiline/comma-separated `-f` / `--filter` (DLL name substrings, e.g. `VirtoCommerce.Platform`) |
+| Variable (optional) | `CODELOGIC_METHOD_FILTERS` — multiline/comma-separated `-m` / `--method-filter` (namespace prefixes, e.g. `VirtoCommerce`) |
+| Variable (optional) | `CODELOGIC_DATABASE_IDENTITIES` — multiline `-d` JDBC identities |
+
+Each scan uses `--rescan` and `--expunge-scan-sessions` (CI keeps only the latest fingerprinted scan).
 
 Scripts: [`scripts/codelogic/`](../../scripts/codelogic/).
 
