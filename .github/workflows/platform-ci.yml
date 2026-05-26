@@ -96,6 +96,7 @@ jobs:
           CODELOGIC_ASSEMBLY_FILTERS: ${{ vars.CODELOGIC_ASSEMBLY_FILTERS }}
           CODELOGIC_METHOD_FILTERS: ${{ vars.CODELOGIC_METHOD_FILTERS }}
           CODELOGIC_DATABASE_IDENTITIES: ${{ vars.CODELOGIC_DATABASE_IDENTITIES }}
+          CODELOGIC_FORCE_REGISTRATION: ${{ vars.CODELOGIC_FORCE_REGISTRATION }}
         shell: bash
         run: |
           set -euo pipefail

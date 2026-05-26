@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # Scan dotnet publish output with the CodeLogic .NET agent (Docker).
 # Usage: run-dotnet-analyze.sh <publish_dir>
-#
-# Optional env (multiline or comma-separated per entry):
-#   CODELOGIC_ASSEMBLY_FILTERS  -> -f|--filter (DLL / filename substrings)
-#   CODELOGIC_METHOD_FILTERS    -> -m|--method-filter (namespace prefixes)
 set -euo pipefail
 
 PUBLISH_DIR="${1:?publish directory required}"
@@ -19,7 +15,6 @@ if [[ ! -d "$PUBLISH_DIR" ]]; then
   exit 1
 fi
 
-# Append analyze flags from a multiline/comma-separated env value.
 _append_multi_spec() {
   local -n _out=$1
   local _flag=$2
@@ -47,6 +42,10 @@ REPO_ROOT="${GITHUB_WORKSPACE:-$(cd "$(dirname "$PUBLISH_DIR")/.." && pwd)}"
 REL_PUBLISH="${PUBLISH_DIR#"$REPO_ROOT"/}"
 CONTAINER_PUBLISH="/scan/${REL_PUBLISH}"
 
+# shellcheck source=docker-common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/docker-common.sh"
+trap codelogic_cleanup EXIT
+
 APPLICATION_NAME="${CODELOGIC_APPLICATION_NAME:-vc-platform}"
 SCAN_SPACE_NAME="${CODELOGIC_SCAN_SPACE_NAME:-Development}"
 IMAGE_HOST="${CODELOGIC_HOST#http://}"
@@ -54,28 +53,16 @@ IMAGE_HOST="${IMAGE_HOST#https://}"
 IMAGE_HOST="${IMAGE_HOST%%/*}"
 IMAGE="${IMAGE_HOST}/codelogic_dotnet:latest"
 
-# LibGit2Sharp in the agent reads git metadata from /scan; match runner UID and mark safe.directory.
-DOCKER_USER=(--user "$(id -u):$(id -g)")
-GITCONFIG="$(mktemp)"
-trap 'rm -f "$GITCONFIG"' EXIT
-printf '[safe]\n\tdirectory = /scan\n' > "$GITCONFIG"
-
-DOCKER_VOLUMES=(
-  -v "${REPO_ROOT}:/scan"
-  -v "${GITCONFIG}:/tmp/gitconfig-codelogic:ro"
-)
+DOCKER_VOLUMES=("${CODELOGIC_DOCKER_VOLUMES[@]}")
 
 REF_ARGS=()
 _add_ref_path() {
-  local _container_path=$1
-  REF_ARGS+=(--ref-path="${_container_path}")
-  echo "  ref-path: ${_container_path}"
+  REF_ARGS+=(--ref-path="$1")
+  echo "  ref-path: $1"
 }
 
-# Source tree (namespace / project context; git metadata when ownership matches).
 _add_ref_path /scan
 
-# Host .NET SDK — mount so ref-path resolves Microsoft.* / ASP.NET shared assemblies.
 DOTNET_ROOT="${DOTNET_ROOT:-/usr/share/dotnet}"
 if [[ -d "${DOTNET_ROOT}/shared" ]]; then
   DOCKER_VOLUMES+=(-v "${DOTNET_ROOT}:/dotnet:ro")
@@ -85,7 +72,6 @@ if [[ -d "${DOTNET_ROOT}/shared" ]]; then
   fi
 fi
 
-# NuGet package cache from restore/build on the runner.
 NUGET_PACKAGES="${NUGET_PACKAGES:-${HOME}/.nuget/packages}"
 if [[ -d "${NUGET_PACKAGES}" ]]; then
   DOCKER_VOLUMES+=(-v "${NUGET_PACKAGES}:/nuget:ro")
@@ -107,21 +93,19 @@ if [[ -n "${CODELOGIC_DATABASE_IDENTITIES:-}" ]]; then
   done <<< "$CODELOGIC_DATABASE_IDENTITIES"
 fi
 
-echo "CodeLogic analyze: application=${APPLICATION_NAME} scan-space=${SCAN_SPACE_NAME}"
-echo "  artifact path (container): ${CONTAINER_PUBLISH}"
-if ((${#FILTER_ARGS[@]})); then
-  echo "  assembly filters (-f): ${FILTER_ARGS[*]}"
-fi
-if ((${#METHOD_FILTER_ARGS[@]})); then
-  echo "  method filters (-m): ${METHOD_FILTER_ARGS[*]}"
+REG_ARGS=()
+if [[ "${CODELOGIC_FORCE_REGISTRATION:-}" == "true" ]]; then
+  REG_ARGS+=(--force-registration)
+  echo "  registration: --force-registration"
 fi
 
+echo "CodeLogic analyze: application=${APPLICATION_NAME} scan-space=${SCAN_SPACE_NAME}"
+echo "  artifact path (container): ${CONTAINER_PUBLISH}"
+echo "  agent home (container): ${CODELOGIC_CONTAINER_HOME} (host: ${CODELOGIC_AGENT_HOME})"
+
 docker run --pull always --rm \
-  "${DOCKER_USER[@]}" \
-  -e CODELOGIC_HOST \
-  -e AGENT_UUID \
-  -e AGENT_PASSWORD \
-  -e GIT_CONFIG_GLOBAL=/tmp/gitconfig-codelogic \
+  "${CODELOGIC_DOCKER_USER[@]}" \
+  "${CODELOGIC_DOCKER_ENV[@]}" \
   "${DOCKER_VOLUMES[@]}" \
   "$IMAGE" analyze \
     --application "$APPLICATION_NAME" \
@@ -131,5 +115,6 @@ docker run --pull always --rm \
     "${FILTER_ARGS[@]}" \
     "${METHOD_FILTER_ARGS[@]}" \
     "${DB_ARGS[@]}" \
+    "${REG_ARGS[@]}" \
     --rescan \
     --expunge-scan-sessions

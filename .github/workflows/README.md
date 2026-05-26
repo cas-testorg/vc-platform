@@ -22,6 +22,8 @@ Runs on **`dev`** only (push, pull request, manual dispatch).
 
 Each scan uses `--rescan` and `--expunge-scan-sessions` (CI keeps only the latest fingerprinted scan).
 
+Agent credentials cache: `${RUNNER_TEMP}/codelogic-agent-home` mounted as container `HOME` (`/agent-home`). If authorization hangs after switching servers, set `CODELOGIC_FORCE_REGISTRATION` to `true` for one workflow run, then clear it.
+
 Scripts: [`scripts/codelogic/`](../../scripts/codelogic/).
 
 ## [pin-check.yml](pin-check.yml)

@@ -20,9 +20,9 @@ if [[ ! -s "$BUILD_LOG" ]]; then
   } > "$BUILD_LOG"
 fi
 
-GITCONFIG="$(mktemp)"
-trap 'rm -f "$GITCONFIG"' EXIT
-printf '[safe]\n\tdirectory = /scan\n' > "$GITCONFIG"
+# shellcheck source=docker-common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/docker-common.sh"
+trap codelogic_cleanup EXIT
 
 IMAGE_HOST="${CODELOGIC_HOST#http://}"
 IMAGE_HOST="${IMAGE_HOST#https://}"
@@ -30,14 +30,12 @@ IMAGE_HOST="${IMAGE_HOST%%/*}"
 IMAGE="${IMAGE_HOST}/codelogic_dotnet:latest"
 JOB_NAME="${GITHUB_REPOSITORY:-unknown} — ${GITHUB_WORKFLOW:-CI}"
 
+echo "  agent home (container): ${CODELOGIC_CONTAINER_HOME} (host: ${CODELOGIC_AGENT_HOME})"
+
 docker run --pull always --rm \
-  --user "$(id -u):$(id -g)" \
-  -e CODELOGIC_HOST \
-  -e AGENT_UUID \
-  -e AGENT_PASSWORD \
-  -e GIT_CONFIG_GLOBAL=/tmp/gitconfig-codelogic \
-  -v "${REPO_ROOT}:/scan" \
-  -v "${GITCONFIG}:/tmp/gitconfig-codelogic:ro" \
+  "${CODELOGIC_DOCKER_USER[@]}" \
+  "${CODELOGIC_DOCKER_ENV[@]}" \
+  "${CODELOGIC_DOCKER_VOLUMES[@]}" \
   "$IMAGE" send_build_info \
     --agent-uuid="${AGENT_UUID}" \
     --agent-password="${AGENT_PASSWORD}" \
